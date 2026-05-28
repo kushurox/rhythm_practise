@@ -123,6 +123,7 @@ input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
   </div>
   <div class="hbtns">
     <button class="btn btn-ghost" onclick="openSettings()">⚙ KEYS</button>
+    <button class="btn btn-ghost" onclick="openDev()">⚡ DEV</button>
     <button class="btn btn-ghost" onclick="exportPat()">↑ EXPORT</button>
     <label class="btn btn-ghost" style="cursor:pointer">↓ IMPORT<input type="file" accept=".json" style="display:none" onchange="importPat(this)"></label>
     <button class="btn btn-ghost" onclick="clearNotes()">✕ CLEAR</button>
@@ -211,6 +212,27 @@ input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
       <button class="btn btn-play" id="play-btn" onclick="togglePlay()">▶ PLAY</button>
       <button class="btn btn-ghost" onclick="resetPrac()">↺ RESET</button>
       <button class="btn btn-ghost" id="metro-btn2" onclick="toggleMetro()">♩ METRONOME OFF</button>
+      <button class="btn btn-ghost" id="hitsnd-btn" onclick="toggleHitSound()">✦ HIT SOUND OFF</button>
+      <span style="font-size:11px;color:var(--dim);margin-left:auto;white-space:nowrap">SPACE play/stop &nbsp;·&nbsp; TAB+R reset &nbsp;·&nbsp; ESC editor</span>
+    </div>
+
+    <div id="results-panel" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 16px;border-bottom:1px solid var(--border)">
+        <span style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;color:var(--accent)">RESULTS</span>
+        <button class="btn btn-ghost" style="padding:3px 10px;font-size:12px" onclick="clearResults()">CLEAR</button>
+      </div>
+      <div style="overflow-y:auto;max-height:240px">
+        <table id="results-table" style="width:100%;border-collapse:collapse;font-family:'Rajdhani',sans-serif;font-size:15px">
+          <thead><tr style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg2)">
+            <th style="text-align:left;padding:6px 16px;font-weight:400">#</th>
+            <th style="padding:6px 12px;font-weight:400;color:var(--perfect)">Perfect</th>
+            <th style="padding:6px 12px;font-weight:400;color:var(--good)">Good</th>
+            <th style="padding:6px 12px;font-weight:400;color:var(--miss)">Miss</th>
+            <th style="padding:6px 16px;font-weight:400">Accuracy</th>
+          </tr></thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </main>
@@ -228,6 +250,37 @@ input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
     <div class="mfoot">
       <button class="btn btn-ghost" onclick="resetKeys()">Defaults</button>
       <button class="btn btn-accent" onclick="closeSettings()">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Dev modal -->
+<div class="overlay" id="dev-modal" onclick="if(event.target===this)closeDev()">
+  <div class="modal" style="min-width:360px">
+    <div class="modal-title">⚡ DEV / ADVANCED</div>
+
+    <div class="msec-lbl">Hit Offset <span style="color:var(--text);font-size:13px" id="dev-offset-val">0 ms</span></div>
+    <input type="range" id="dev-offset" min="-200" max="200" value="0" step="1" oninput="devChanged()" style="width:100%;accent-color:var(--accent);margin-bottom:4px">
+    <p class="mhint">Slide negative if notes seem to pass the ring before you can react. Slide positive if you feel like you're hitting early. Same as "universal offset" in other rhythm games.</p>
+
+    <div class="mdiv"></div>
+
+    <div class="msec-lbl">Perfect Window <span style="color:var(--perfect);font-size:13px" id="dev-perfect-val">65 ms</span></div>
+    <input type="range" id="dev-perfect" min="20" max="200" value="65" step="1" oninput="devChanged()" style="width:100%;accent-color:var(--perfect);margin-bottom:16px">
+
+    <div class="msec-lbl">Good Window <span style="color:var(--good);font-size:13px" id="dev-good-val">130 ms</span></div>
+    <input type="range" id="dev-good" min="40" max="300" value="130" step="1" oninput="devChanged()" style="width:100%;accent-color:var(--good);margin-bottom:16px">
+
+    <div class="mdiv"></div>
+
+    <div class="msec-lbl">Lookahead <span style="color:var(--text);font-size:13px" id="dev-look-val">5 beats</span></div>
+    <input type="range" id="dev-look" min="2" max="10" value="5" step="1" oninput="devChanged()" style="width:100%;accent-color:var(--accent);margin-bottom:4px">
+    <p class="mhint">How many beats are visible on screen at once.</p>
+
+    <div class="mdiv"></div>
+    <div class="mfoot">
+      <button class="btn btn-ghost" onclick="resetDev()">Reset Defaults</button>
+      <button class="btn btn-accent" onclick="closeDev()">Done</button>
     </div>
   </div>
 </div>
@@ -250,23 +303,29 @@ let listenSlot = null; // {side,idx,el}
 // Practice runtime
 let audioCtx = null;
 let playing = false;
-let startTime = 0;  // audioCtx.currentTime when beat 0 started
+let startTime = 0;    // audioCtx.currentTime when beat 0 started
+let startPerfMs = 0;  // performance.now() when beat 0 started (same moment as startTime)
 let speed = 1.0;
 let liveNotes = []; // {beatTime, channel, state:'pending'|'perfect'|'good'|'miss', dieAt}
 let score = {perfect:0,good:0,miss:0,combo:0};
 let flashes = []; // {channel,time,result}
 let hitPopTimeout = null;
 let rafId = null;
+let hitSoundOn = false;
+let tabHeld = false;
+let resultCount = 0; // sequential run number across sessions
 
-const PERFECT_MS = 65;
-const GOOD_MS = 130;
-const LOOKAHEAD = 5; // beats visible
+let PERFECT_MS = 65;
+let GOOD_MS = 130;
+let LOOKAHEAD = 5;
+let INPUT_OFFSET_MS = 0;
 
 // ─────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────
 function init(){
   loadStorage();
+  loadDevSettings();
   document.getElementById('inp-bpm').value = pat.bpm;
   document.getElementById('inp-beats').value = pat.totalBeats;
   document.getElementById('pattern-name').value = pat.name;
@@ -279,6 +338,7 @@ function init(){
   window.addEventListener('keydown', onKD);
   window.addEventListener('keyup', onKU);
   window.addEventListener('resize', onResize);
+  window.addEventListener('blur', ()=>{ tabHeld=false; });
 }
 
 // ─────────────────────────────────────────────
@@ -408,17 +468,67 @@ function resetKeys(){
 function openSettings(){ renderModalKeys(); document.getElementById('modal').classList.add('open'); }
 function closeSettings(){ cancelListen(); document.getElementById('modal').classList.remove('open'); }
 
+function openDev(){ document.getElementById('dev-modal').classList.add('open'); }
+function closeDev(){ document.getElementById('dev-modal').classList.remove('open'); }
+
+function devChanged(){
+  INPUT_OFFSET_MS = parseInt(document.getElementById('dev-offset').value);
+  PERFECT_MS      = parseInt(document.getElementById('dev-perfect').value);
+  GOOD_MS         = parseInt(document.getElementById('dev-good').value);
+  LOOKAHEAD       = parseInt(document.getElementById('dev-look').value);
+  // clamp: good must be >= perfect
+  if(GOOD_MS < PERFECT_MS){ GOOD_MS=PERFECT_MS; document.getElementById('dev-good').value=GOOD_MS; }
+  document.getElementById('dev-offset-val').textContent  = (INPUT_OFFSET_MS>0?'+':'')+INPUT_OFFSET_MS+' ms';
+  document.getElementById('dev-perfect-val').textContent = PERFECT_MS+' ms';
+  document.getElementById('dev-good-val').textContent    = GOOD_MS+' ms';
+  document.getElementById('dev-look-val').textContent    = LOOKAHEAD+' beats';
+  saveDevSettings();
+}
+
+function resetDev(){
+  INPUT_OFFSET_MS=0; PERFECT_MS=65; GOOD_MS=130; LOOKAHEAD=5;
+  document.getElementById('dev-offset').value  = 0;
+  document.getElementById('dev-perfect').value = 65;
+  document.getElementById('dev-good').value    = 130;
+  document.getElementById('dev-look').value    = 5;
+  devChanged();
+}
+
+function saveDevSettings(){
+  try{ localStorage.setItem('rt_dev',JSON.stringify({INPUT_OFFSET_MS,PERFECT_MS,GOOD_MS,LOOKAHEAD})); }catch(e){}
+}
+
+function loadDevSettings(){
+  try{
+    const d=localStorage.getItem('rt_dev'); if(!d) return;
+    const v=JSON.parse(d);
+    INPUT_OFFSET_MS = v.INPUT_OFFSET_MS ?? 0;
+    PERFECT_MS      = v.PERFECT_MS ?? 65;
+    GOOD_MS         = v.GOOD_MS ?? 130;
+    LOOKAHEAD       = v.LOOKAHEAD ?? 5;
+    document.getElementById('dev-offset').value  = INPUT_OFFSET_MS;
+    document.getElementById('dev-perfect').value = PERFECT_MS;
+    document.getElementById('dev-good').value    = GOOD_MS;
+    document.getElementById('dev-look').value    = LOOKAHEAD;
+    devChanged();
+  }catch(e){}
+}
+
 // ─────────────────────────────────────────────
 // MODE SWITCH
 // ─────────────────────────────────────────────
 function setMode(m){
+  if(m===mode && m==='practice') return; // already in practice, ignore re-click while playing
+  // close any open modals on mode switch
+  closeSettings();
+  closeDev();
+  stopPlay();
   mode=m;
   document.getElementById('editor').style.display = m==='editor'?'flex':'none';
   document.getElementById('practice').style.display = m==='practice'?'flex':'none';
   document.getElementById('mb-edit').classList.toggle('active',m==='editor');
   document.getElementById('mb-play').classList.toggle('active',m==='practice');
   if(m==='practice') initPrac();
-  else stopPlay();
 }
 
 // ─────────────────────────────────────────────
@@ -446,6 +556,38 @@ function resetScore(){ score={perfect:0,good:0,miss:0,combo:0}; updateScoreEl();
 
 function resetPrac(){ stopPlay(); resetScore(); buildNotes(); drawFrame(0); }
 
+function snapScore(){
+  const {perfect,good,miss}=score;
+  const tot=perfect+good+miss;
+  const acc=tot>0?Math.round((perfect*100+good*50)/(tot*100)*100):0;
+  return {perfect,good,miss,acc};
+}
+
+function appendResult(s){
+  resultCount++;
+  const tbody=document.getElementById('results-body');
+  const odd=resultCount%2===0;
+  const tr=document.createElement('tr');
+  if(odd) tr.style.background='rgba(255,255,255,.02)';
+  tr.innerHTML=
+    `<td style="padding:7px 16px;font-family:'Orbitron',monospace;font-size:11px;color:var(--dim)">${resultCount}</td>`+
+    `<td style="padding:7px 12px;text-align:center;color:var(--perfect);font-weight:600">${s.perfect}</td>`+
+    `<td style="padding:7px 12px;text-align:center;color:var(--good);font-weight:600">${s.good}</td>`+
+    `<td style="padding:7px 12px;text-align:center;color:var(--miss);font-weight:600">${s.miss}</td>`+
+    `<td style="padding:7px 16px;text-align:center;font-family:'Orbitron',monospace;font-size:13px">${s.acc}%</td>`;
+  tbody.appendChild(tr);
+  // scroll to latest
+  const wrap=tbody.closest('div');
+  if(wrap) wrap.scrollTop=wrap.scrollHeight;
+  document.getElementById('results-panel').style.display='block';
+}
+
+function clearResults(){
+  resultCount=0;
+  document.getElementById('results-body').innerHTML='';
+  document.getElementById('results-panel').style.display='none';
+}
+
 function togglePlay(){
   if(playing) stopPlay(); else startPlay();
 }
@@ -453,7 +595,7 @@ function togglePlay(){
 function startPlay(){
   const ctx=ac(); if(ctx.state==='suspended') ctx.resume();
   buildNotes(); resetScore();
-  playing=true; startTime=ctx.currentTime;
+  playing=true; startTime=ctx.currentTime; startPerfMs=performance.now();
   document.getElementById('play-btn').textContent='⏹ STOP';
   scheduleMetro();
   rafId=requestAnimationFrame(loop);
@@ -472,12 +614,12 @@ function curBeat(){
 
 function loop(){
   if(!playing) return;
-  const cb=curBeat();
+  let cb=curBeat();
   if(cb>=pat.totalBeats+1.5){
-    // loop pattern
-    startTime=ac().currentTime;
-    buildNotes();
-    if(metroOn) scheduleMetro();
+    stopPlay();
+    appendResult(snapScore());
+    resetScore(); buildNotes();
+    return;
   }
   autoMiss(cb);
   drawFrame(cb);
@@ -608,12 +750,23 @@ function drawFrame(cb){
 // KEY INPUT
 // ─────────────────────────────────────────────
 function onKD(e){
+  // Tab as modifier — block its default (focus-jump) always
+  if(e.code==='Tab'){ e.preventDefault(); tabHeld=true; return; }
+
   if(listenSlot){
     e.preventDefault();
     const k=e.key.toLowerCase();
     if(/^[a-z0-9,./;'\[\]`\-=\\]$/.test(k)) assignKey(k);
     return;
   }
+
+  // practice shortcuts
+  if(mode==='practice'){
+    if(e.code==='Space'){  e.preventDefault(); togglePlay(); return; }
+    if(e.code==='Escape'){ e.preventDefault(); setMode('editor'); return; }
+    if(tabHeld && e.code==='KeyR'){ e.preventDefault(); resetPrac(); return; }
+  }
+
   if(mode!=='practice'||!playing) return;
   const k=e.key.toLowerCase();
   let side=null;
@@ -627,8 +780,8 @@ function onKD(e){
   const pill=document.getElementById(`pill-${side}-${pi}`);
   if(pill){ pill.classList.add('lit',side); setTimeout(()=>pill.classList.remove('lit',side),90); }
 
-  // find nearest pending note on this channel
-  const cb=curBeat();
+  // use e.timeStamp (when key was physically pressed) + user's offset calibration
+  const cb=(e.timeStamp - startPerfMs + INPUT_OFFSET_MS) / 1000 * bpsNow();
   const winB=GOOD_MS/1000*bpsNow();
   let best=null, bestD=Infinity;
   liveNotes.forEach(n=>{
@@ -643,6 +796,7 @@ function onKD(e){
     best.state=res;
     score[res]++; score.combo++;
     flashes.push({channel:side,time:performance.now(),result:res});
+    playHitClick(res);
     popHit(res);
     updateScoreEl();
   } else {
@@ -651,6 +805,7 @@ function onKD(e){
 }
 
 function onKU(e){
+  if(e.code==='Tab'){ tabHeld=false; return; }
   if(listenSlot) return;
   const k=e.key.toLowerCase();
   ['L','R'].forEach(side=>{
@@ -694,6 +849,7 @@ function speedChanged(){
     const cb=curBeat();
     speed=pct/100;
     startTime=ac().currentTime - cb/bpsNow();
+    startPerfMs=performance.now() - cb/bpsNow()*1000;
   } else { speed=pct/100; }
   updateSpdDisplay();
 }
@@ -713,6 +869,26 @@ function toggleMetro(){
   document.getElementById('metro-btn').textContent=lbl;
   document.getElementById('metro-btn2').textContent=lbl;
   if(metroOn&&playing) scheduleMetro();
+}
+
+function toggleHitSound(){
+  hitSoundOn=!hitSoundOn;
+  document.getElementById('hitsnd-btn').textContent=hitSoundOn?'✦ HIT SOUND ON':'✦ HIT SOUND OFF';
+}
+
+function playHitClick(result){
+  if(!hitSoundOn) return;
+  const ctx=ac();
+  const t=ctx.currentTime;
+  // short sharp click: high sine burst + quick gain decay
+  const osc=ctx.createOscillator();
+  const gain=ctx.createGain();
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.type='sine';
+  osc.frequency.value = result==='perfect' ? 1200 : 900;
+  gain.gain.setValueAtTime(0.35, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t+0.04);
+  osc.start(t); osc.stop(t+0.045);
 }
 
 function scheduleMetro(){
